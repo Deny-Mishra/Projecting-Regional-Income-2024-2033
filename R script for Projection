@@ -1,0 +1,793 @@
+rm(list=ls())
+cat("\015")
+
+# Elemental Regions Population and Personal Income
+
+library(readxl) 
+library(dplyr) 
+library(stringr)
+library(tidyr) 
+library(broom)
+library(lmtest)
+library(forecast) 
+library(nlme) 
+library(writexl)
+library(car)
+library(openxlsx)
+
+
+
+#################################################################################################
+################################################################################################# County Population
+
+# 
+# 
+# # Define the county groupings 
+# 
+# county_groups <- list( 
+#   
+#   Region1 = c("Escambia", "Bay", "Gulf", "Franklin"), 
+#   
+#   Region2 = c("Santa Rosa", "Okaloosa", "Walton"), 
+#   
+#   Region3 = c("Holmes", "Jackson", "Washington", "Calhoun", "Liberty", "Madison", "Hamilton", "Taylor", "Lafayette", "Suwannee"), 
+#   
+#   Region4 = c("Gadsden", "Wakulla", "Jefferson"), 
+#   
+#   Region5 = c("Leon", "Alachua"), 
+#   
+#   Region6 = c("Dixie", "Gilchrist", "Columbia", "Union", "Bradford", "Baker", "Citrus", "Levy", "Marion"), 
+#   
+#   Region7 = c("Duval"), 
+#   
+#   Region8 = c("Nassau", "Clay", "Putnam", "St. Johns", "Flagler"), 
+#   
+#   Region9 = c("Volusia", "Brevard"), 
+#   
+#   Region10 = c("Hernando", "Pasco", "Sumter", "Lake", "Osceola"), 
+#   
+#   Region11 = c("Pinellas", "Hillsborough", "Manatee", "Sarasota", "Polk"), 
+#   
+#   Region12 = c("Seminole", "Orange"), 
+#   
+#   Region13 = c("Hardee", "DeSoto", "Highlands", "Okeechobee"), 
+#   
+#   Region14 = c("Indian River", "St. Lucie", "Martin", "Palm Beach"), 
+#   
+#   Region15 = c("Broward", "Miami-Dade"), 
+#   
+#   Region16 = c("Charlotte", "Glades", "Lee", "Hendry", "Collier", "Monroe") 
+#   
+# ) 
+# 
+# 
+# 
+# # Create a function to get aggregated data by county group 
+# 
+# Region_aggregated <- function(group_counties, group_name) { 
+#   
+#   group_data <- Population %>% 
+#     
+#     filter(County %in% group_counties) %>% 
+#     
+#     select(-County) %>% 
+#     
+#     summarise(across(everything(), sum, na.rm = TRUE)) %>% 
+#     
+#     mutate(Region = group_name) 
+#   
+#   return(group_data) 
+#   
+# } 
+# 
+# 
+# 
+# # Loop through each group and get the aggregated data 
+# 
+# aggregated_data_list <- lapply(names(county_groups), function(region_name) { 
+#   
+#   Region_aggregated(county_groups[[region_name]], region_name) 
+#   
+# }) 
+# 
+# 
+# 
+# # Combine all the aggregated data into one data frame 
+# 
+# aggregated_data <- bind_rows(aggregated_data_list) 
+# 
+# # Reorder columns to have "Region" as the first column
+# 
+# Regions_Population <- aggregated_data %>% 
+#   select(Region, everything())
+# 
+# 
+# ##############################################################################################
+# ############################################################################################## County Personal Income
+
+
+
+
+# Read the data 
+
+ratio_file <- "###############"
+long_income_file <- "####################"
+long_pop_file <- "#############################"
+
+# Read the ratio data (assuming the Excel file has a sheet named "Sheet1") 
+
+df_ratio <- read_excel(ratio_file, sheet = "Sheet1") 
+df_income_long <- read_excel(long_income_file, sheet = "Sheet1")
+df_pop_long <- read_excel(long_pop_file, sheet = "Sheet1")
+
+# Reshape the personal income data from wide to long format 
+
+# df_income_long <- Regions_Income %>% 
+#   
+#   pivot_longer(cols = -Region, names_to = "year", values_to = "personal_income") %>% 
+#   
+#   mutate(year = as.integer(year)) 
+
+
+
+# Filter the data for years starting from 1990 
+
+df_income_filtered <- df_income_long %>% 
+  
+  filter(year >= 1990) 
+
+
+
+df_ratio_filtered <- df_ratio %>% 
+  
+  filter(year >= 1990) %>% 
+  filter(year < 2024)
+
+
+
+# Merge the personal income data with the ratio data 
+
+df_merged <- df_income_filtered %>% 
+  
+  inner_join(df_ratio_filtered, by = "year") 
+
+
+
+# Apply the ratio to convert personal income to real personal income 
+
+df_merged <- df_merged %>% 
+  
+  mutate(real_personal_income = personal_income * ratio) #%>%
+ 
+
+
+##############################################################################################
+##############################################################################################
+
+# Reshape the population data from wide to long format 
+
+df_pop_long <- df_pop_long %>% 
+  
+  mutate(year = as.integer(year)) %>% 
+  filter(year < 2034) %>% 
+  inner_join(df_ratio, by = "year") %>% 
+  select(-fypers,-ratio) %>% 
+  rename(statewide_income = fyrpers) 
+
+
+
+# Merge the real income data with the existing dataframe
+merged_data <- left_join(df_pop_long, df_merged, by = c("Region", "year")) %>% 
+  select(-personal_income, -fypers, -fyrpers, -ratio) %>% 
+  rename(region_income = real_personal_income)
+
+
+##calculating state_level population
+state_population<- merged_data %>% 
+  group_by(year)%>%
+  summarise(statewide_population=sum(population))
+
+##putting back to merged_data
+merged_data <- data.frame(merged_data%>%
+                            left_join(state_population, by="year"))
+
+
+merged_data <- merged_data %>%
+  mutate(ratio_pop=population/statewide_population) %>%  ###Ratio- regional population by statewise population
+  mutate(statewide_income_sq = statewide_income*statewide_income) %>%
+  mutate(regional_population_sq = population * population) %>% 
+  mutate(statewide_popn_sq = statewide_population^2)%>%
+  mutate(statewide_popn_cube = statewide_population^3)
+
+
+##Taking first differece:
+merged_data <- merged_data%>%
+  group_by(Region)%>%
+  mutate(     
+    diff_pop =c(NA,diff(population)),
+    diff_regional_population_sq =c(NA,diff(regional_population_sq)),
+    diff_state_income =c(NA,diff(statewide_income)),
+    diff_statewide_popn= c(NA,diff(statewide_population)),
+    diff_region_income=c(NA,diff(region_income))
+  )%>%
+  ungroup()
+
+
+# Filter data to include only years up to 2022 for the regression
+train_data <- merged_data %>%
+  filter(year <= 2023)
+train_data<-drop_na(train_data)
+
+
+
+######
+test_data <- merged_data %>% filter(year >=2024)
+
+
+#############################################################################################
+#############################################################################################  Regression Models
+
+#####OLS############
+##########################################
+#RUNNING  OLS for each region in a loop###
+##########################################
+# Initialize lists to store results
+ols_results <- list()
+dw_tests_ols <- list()
+predictions_ols <- list()
+
+# Loop through each region and fit OLS models
+for (region in unique(train_data$Region)) {
+  region_data <- train_data %>%
+    filter(Region == region) %>%
+    arrange(year)
+  
+  # Fit OLS model
+  ols_model <- lm(diff_region_income ~ ratio_pop + diff_state_income + diff_pop , data = region_data)
+  ols_results[[region]] <- summary(ols_model)
+  
+  # Perform the Durbin-Watson test
+  dw_tests_ols[[region]] <- dwtest(ols_model)
+  
+  # Predict for the next 11 years (2023 to 2033) using OLS model
+  future_data <- merged_data %>%
+    filter(Region == region & year >= 2024 & year <= 2034) %>%
+    select(Region, year,ratio_pop,diff_state_income,diff_pop)
+  
+  future_data$PredictedRegionIncome_OLS <- predict(ols_model, newdata = future_data)
+  predictions_ols[[region]] <- future_data
+}
+# Combine all the predictions into one data frame
+#predicted_income_data_ols <- bind_rows(predictions_ols)
+
+# View the predictions
+#print(predicted_income_data_ols)
+
+# Write the predictions to a CSV file
+#write.csv(predicted_income_data_ols, "predicted_region_income_ols.csv", row.names = FALSE)
+
+# Print OLS results and Durbin-Watson test results for each region
+for (region in names(ols_results)) {
+  cat("\nRegion:", region)
+  print(ols_results[[region]])
+  print(dw_tests_ols[[region]])
+}
+
+
+
+#write_xlsx(predicted_income_data_ols, "H:/predicted_income_ols.xlsx")
+######################################################################################################################
+###RUNNING OLS Separately for each regions as there are issues of Multicollinearity,Heteroscedasticity and Autocorelation, 
+###################################################################################
+#Region 1 
+#create subset of data from train data based on Region
+region1_data <- train_data %>% filter(Region == "Region 1") ##filter based on Region
+##Use best model for that region
+ols_model1 <- lm(diff_region_income ~ ratio_pop + diff_state_income, data = region1_data) ##change model according to regions
+summary(ols_model1)
+#Durbin Watson Test
+dwtest(ols_model1)
+#Bresuch Pegan Test
+bptest(ols_model1)
+#here p>0.05-- No heteroscedasticity
+#multicollinearity
+vif(ols_model1)
+########################################################################################################
+####Checking Outliers in the model
+
+#Cook's Distance-- This measure's how much removing a point changes the model estimates.
+cooks_dis1<-cooks.distance(ols_model1) ##All the values are less than 1. So, there is no effect of outliers on regression coefficient
+plot(cooks_dis1, type='h')
+abline(h=1,col='red')
+##Leverage Values- THis measures how far an observation's prediction values(x-values) are from the mean. 
+leverage_values <-hatvalues(ols_model1)
+threshold <-2*(length(coef(ols_model1)))/nrow(region1_data) ##Formula for leverage value- 2x (p/n) where p- number of predictors in a model, n-sample size
+high_leverage_points <- which(leverage_values>threshold)
+plot(leverage_values, type='h')
+abline(h=threshold,col='blue')
+
+##combining both techniques is always preferred 
+influential_points_reg1 <- which(cooks_dis1>1|leverage_values>threshold)
+region1_data[influential_points_reg1,]
+
+##we have to combine Leverage Values and Cook's Distance Idea and Look into those where both Cook's distance>1
+#and leverage values 
+#########################################################################################################
+##future diff_income
+future_reg1 <-test_data %>%
+  filter(Region == "Region 1") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg1$predicted_diff_income_reg1 <- predict(ols_model1,newdata = future_reg1)
+##getting actual regional income for Region 1
+last_actual_reg_income <- tail(region1_data$region_income,1)
+future_reg1$region_income <- cumsum(c(last_actual_reg_income,future_reg1$predicted_diff_income_reg1))[-1]
+
+
+#Region 5
+#create subset of data from train data based on Region
+region5_data <- train_data %>% filter(Region == "Region 5") ##filter based on Region
+##Use best model for that region
+ols_model5 <- lm(diff_region_income ~ ratio_pop + diff_state_income , data = region5_data) ##change model according to regions
+summary(ols_model5)
+#multicollinearity test
+vif(ols_model5)
+#DW test
+dwtest(ols_model5)
+#Breusch-Pagan Test
+bptest(ols_model5) ####p-value<0.05 there is heteroscedasticity
+##future diff_income
+future_reg5 <-test_data %>%
+  filter(Region == "Region 5") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg5$predicted_diff_income_reg5 <- predict(ols_model5,newdata = future_reg5)
+##getting actual regional income for Region 1
+last_actual_reg_income5 <- tail(region5_data$region_income,1)
+future_reg5$region_income <- cumsum(c(last_actual_reg_income5,future_reg5$predicted_diff_income_reg5))[-1]
+
+library(sandwich)
+coeftest(ols_model5,vcov =vcovHC(ols_model5,type="HC3") )
+
+
+##Use best model for that region
+gls_model5 <- gls(diff_region_income~diff_state_income+ratio_pop,data = region5_data, 
+                  correlation = corAR1(form = ~ year)) ##change model according to regions
+summary(gls_model5)
+
+#multicollinearity test
+vif(gls_model5)
+#DW test
+residuals_gls5 <- residuals(gls_model5,type ='normalized')
+dw_tests_gls5 <- dwtest(residuals_gls5 ~ 1, data = region5_data)
+dw_tests_gls5
+
+
+#Region 7
+#create subset of data from train data based on Region
+region7_data <- train_data %>% filter(Region == "Region 7") ##filter based on Region
+##Use best model for that region
+ols_model7 <- lm(diff_region_income ~ ratio_pop + diff_state_income , data = region7_data) ##change model according to regions
+summary(ols_model7)
+#multicollinearity test
+vif(ols_model7)
+#DW test
+dwtest(ols_model7)
+#BP test
+bptest(ols_model7) #P-value>0.05 -- No heteroscedasticity
+##future diff_income
+future_reg7 <-test_data %>%
+  filter(Region == "Region 7") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg7$predicted_diff_income_reg7 <- predict(ols_model7,newdata = future_reg7)
+##getting actual regional income for Region 1
+last_actual_reg_income7 <- tail(region7_data$region_income,1)
+future_reg7$region_income <- cumsum(c(last_actual_reg_income7,future_reg7$predicted_diff_income_reg7))[-1]
+
+
+
+
+#Region 8
+#create subset of data from train data based on Region
+region8_data <- train_data %>% filter(Region == "Region 8") ##filter based on Region
+##Use best model for that region
+ols_model8 <- lm(diff_region_income ~ ratio_pop + diff_state_income + diff_pop  , data = region8_data) ##change model according to regions
+summary(ols_model8)
+#multicollinearity test
+vif(ols_model8)
+#DW test
+dwtest(ols_model8)
+#BP test
+bptest(ols_model8) #p-value>0.05 -- no heteroscedasticity
+##future diff_income
+future_reg8 <-test_data %>%
+  filter(Region == "Region 8") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg8$predicted_diff_income_reg8 <- predict(ols_model8,newdata = future_reg8)
+##getting actual regional income for Region 1
+last_actual_reg_income8 <- tail(region8_data$region_income,1)
+future_reg8$region_income <- cumsum(c(last_actual_reg_income8,future_reg8$predicted_diff_income_reg8))[-1]
+
+
+
+
+#Region 9
+#create subset of data from train data based on Region
+region9_data <- train_data %>% filter(Region == "Region 9") ##filter based on Region
+##Use best model for that region
+ols_model9 <- lm(diff_region_income  ~  diff_state_income+ diff_statewide_popn, data = region9_data) ##change model according to regions
+summary(ols_model9)
+#multicollinearity test
+vif(ols_model9)
+#DW test
+dwtest(ols_model9)
+#BP test
+bptest(ols_model9) #p-value>0.05 --No heteroscedasticity
+##future diff_income
+future_reg9 <-test_data %>%
+  filter(Region == "Region 9") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg9$predicted_diff_income_reg9 <- predict(ols_model9,newdata = future_reg9)
+##getting actual regional income for Region 1
+last_actual_reg_income9 <- tail(region9_data$region_income,1)
+future_reg9$region_income <- cumsum(c(last_actual_reg_income9,future_reg9$predicted_diff_income_reg9))[-1]
+
+
+
+
+#Region 10
+#create subset of data from train data based on Region
+region10_data <- train_data %>% filter(Region == "Region 10") ##filter based on Region
+##Use best model for that region
+ols_model10 <- lm(diff_region_income ~ ratio_pop + diff_state_income+ diff_pop , data = region10_data) ##change model according to regions
+summary(ols_model10)
+#multicollinearity test
+vif(ols_model10)
+#DW test
+dwtest(ols_model10)
+#BP test
+bptest(ols_model10)#p-value<0.05--- there is heteroscedasticty 
+##future diff_income
+future_reg10 <-test_data %>%
+  filter(Region == "Region 10") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg10$predicted_diff_income_reg10 <- predict(ols_model10,newdata = future_reg10)
+##getting actual regional income for Region 1
+last_actual_reg_income10 <- tail(region10_data$region_income,1)
+future_reg10$region_income <- cumsum(c(last_actual_reg_income10,future_reg10$predicted_diff_income_reg10))[-1]
+
+
+
+#Region 11
+#create subset of data from train data based on Region
+region11_data <- train_data %>% filter(Region == "Region 11") ##filter based on Region
+##Use best model for that region
+ols_model11 <- lm(diff_region_income~diff_state_income , data = region11_data) ##change model according to regions
+summary(ols_model11)
+#multicollinearity test
+vif(ols_model11)
+#DW test
+dwtest(ols_model11)
+##BP test
+bptest(ols_model11) #p-value>0.05 --- No heteroscedasticity
+
+##future diff_income
+future_reg11 <-test_data %>%
+  filter(Region == "Region 11") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg11$predicted_diff_income_reg11 <- predict(ols_model11,newdata = future_reg11)
+##getting actual regional income for Region 1
+last_actual_reg_income11 <- tail(region11_data$region_income,1)
+future_reg11$region_income <- cumsum(c(last_actual_reg_income11,future_reg11$predicted_diff_income_reg11))[-1]
+
+
+
+#Region 12
+#create subset of data from train data based on Region
+region12_data <- train_data %>% filter(Region == "Region 12") ##filter based on Region
+##Use best model for that region
+ols_model12 <- lm(diff_region_income~diff_state_income , data = region12_data) ##change model according to regions
+summary(ols_model12)
+#multicollinearity test
+vif(ols_model12)
+#DW test
+dwtest(ols_model12)
+#BP test
+bptest(ols_model12)#p-value>0.05 -- No heteroscedasticity 
+##future diff_income
+future_reg12 <-test_data %>%
+  filter(Region == "Region 12") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg12$predicted_diff_income_reg12 <- predict(ols_model12,newdata = future_reg12)
+##getting actual regional income for Region 1
+last_actual_reg_income12 <- tail(region12_data$region_income,1)
+future_reg12$region_income <- cumsum(c(last_actual_reg_income12,future_reg12$predicted_diff_income_reg12))[-1]
+
+
+
+#Region 14
+#create subset of data from train data based on Region
+region14_data <- train_data %>% filter(Region == "Region 14") ##filter based on Region
+##Use best model for that region
+ols_model14 <- lm(diff_region_income ~  diff_state_income+ diff_statewide_popn , data = region14_data) ##change model according to regions
+summary(ols_model14)
+#multicollinearity test
+vif(ols_model14)
+#DW test
+dwtest(ols_model14)
+#BP test
+bptest(ols_model14) #p-value>0.05--- No heteroscedasticity
+##future diff_income
+future_reg14 <-test_data %>%
+  filter(Region == "Region 14") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg14$predicted_diff_income_reg14 <- predict(ols_model14,newdata = future_reg14)
+##getting actual regional income for Region 1
+last_actual_reg_income14 <- tail(region14_data$region_income,1)
+future_reg14$region_income <- cumsum(c(last_actual_reg_income14,future_reg14$predicted_diff_income_reg14))[-1]
+
+
+#Region 15
+#create subset of data from train data based on Region
+region15_data <- train_data %>% filter(Region == "Region 15") ##filter based on Region
+##Use best model for that region
+ols_model15 <- lm(diff_region_income ~  diff_state_income, data = region15_data) ##change model according to regions
+summary(ols_model15)
+#multicollinearity test
+vif(ols_model15)
+#DW test
+dwtest(ols_model15)
+#BP test
+bptest(ols_model15) #p-value>0.05 --- No heteroscedasticity
+##future diff_income
+future_reg15 <-test_data %>%
+  filter(Region == "Region 15") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg15$predicted_diff_income_reg15 <- predict(ols_model15,newdata = future_reg15)
+##getting actual regional income for Region 1
+last_actual_reg_income15 <- tail(region15_data$region_income,1)
+future_reg15$region_income <- cumsum(c(last_actual_reg_income15,future_reg15$predicted_diff_income_reg15))[-1]
+
+
+
+#Region 16
+#create subset of data from train data based on Region
+region16_data <- train_data %>% filter(Region == "Region 16") ##filter based on Region
+##Use best model for that region
+ols_model16 <- lm(diff_region_income ~  diff_state_income+ diff_statewide_popn , data = region16_data) ##change model according to regions
+summary(ols_model16)
+#multicollinearity test
+vif(ols_model16)
+#DW test
+dwtest(ols_model16)
+#BP test
+bptest(ols_model16)# p-value>0.05 -- No heteroscedasticity
+##future diff_income
+future_reg16 <-test_data %>%
+  filter(Region == "Region 16") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg16$predicted_diff_income_reg16 <- predict(ols_model16,newdata = future_reg16)
+##getting actual regional income for Region 1
+last_actual_reg_income16 <- tail(region16_data$region_income,1)
+future_reg16$region_income <- cumsum(c(last_actual_reg_income16,future_reg16$predicted_diff_income_reg16))[-1]
+
+
+####combining forecasted values based on OLS models
+future_regional_income_combined_OLS <- bind_rows(future_reg1,future_reg5,future_reg7,future_reg8,future_reg9,future_reg10,future_reg11,future_reg12,future_reg14,future_reg15,future_reg16)
+
+
+future_regional_income_combined_OLS <- future_regional_income_combined_OLS%>%
+  select(-diff_region_income,-predicted_diff_income_reg1,-predicted_diff_income_reg5,-predicted_diff_income_reg7,
+         -predicted_diff_income_reg8,-predicted_diff_income_reg9,-predicted_diff_income_reg10,
+         -predicted_diff_income_reg11,-predicted_diff_income_reg12,-predicted_diff_income_reg14,
+         -predicted_diff_income_reg15,-predicted_diff_income_reg16)
+
+
+
+
+
+
+
+
+############################################################################################################## GLS
+
+
+##################################
+####Running GLS for all regions##
+#################################
+# Initialize lists to store results
+gls_results <- list()
+dw_tests_gls <- list()
+predictions_gls <- list()
+
+# Loop through each region and fit GLS models
+for (region in unique(train_data$Region)) {
+  region_data <- train_data %>%
+    filter(Region == region) %>%
+    arrange(year)
+  
+  # Fit GLS model
+  gls_model <- gls(diff_region_income~diff_pop +(ratio_pop^2)*diff_state_income, 
+                   data = region_data, correlation = corAR1(form = ~ year))
+  gls_results[[region]] <- summary(gls_model)
+  
+  # Extract residuals and perform Durbin-Watson test
+  residuals_gls <- residuals(gls_model)
+  dw_tests_gls[[region]] <- dwtest(residuals_gls ~ 1, data = region_data)
+  
+  # Predict for the next 11 years (2023 to 2033) using GLS model
+  future_data <- merged_data %>%
+    filter(Region == region & year >= 2024 & year <= 2034) %>%
+    select(Region, year,diff_pop,diff_state_income,ratio_pop)
+  
+  future_data$PredictedRegionIncome_GLS <- predict(gls_model, newdata = future_data)
+  predictions_gls[[region]] <- future_data
+}
+
+# Combine all the predictions into one data frame
+#predicted_income_data_gls <- bind_rows(predictions_gls)
+
+# View the predictions
+#print(predicted_income_data_gls)
+
+# Write the predictions to a CSV file
+#write.csv(predicted_income_data_gls, "predicted_region_income_gls.csv", row.names = FALSE)
+
+# Print GLS results and Durbin-Watson test results for each region
+for (region in names(gls_results)) {
+  cat("\nRegion: ", region)
+  print(gls_results[[region]])
+  print(dw_tests_gls[[region]])
+}
+#########################################################################################################
+
+################################################################################################################
+####Running GLS for those regions wehere multicollinearity, autocorrelation and heteroscedastcity were noticed##
+################################################################################################################
+
+#Region 2
+#create subset of data from train data based on Region
+region2_data <- train_data %>% filter(Region == "Region 2") ##filter based on Region
+##Use best model for that region
+gls_model2 <- gls(log(region_income)~ratio_pop+log(statewide_income), 
+                  data = region2_data, correlation = corAR1(form = ~ year)) ##change model according to regions
+summary(gls_model2)
+
+##since I got standard error as 1 so further checking residual variance
+var(residuals(gls_model2))
+#multicollinearity test
+vif(gls_model2)
+#DW test
+residuals_gls2 <- residuals(gls_model2,type ='normalized')
+dw_tests_gls2 <- dwtest(residuals_gls2 ~ 1, data = region2_data)
+dw_tests_gls2
+##future diff_income
+future_reg2 <-test_data %>%
+  filter(Region == "Region 2") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg2$predicted_log_income_reg2 <- predict(gls_model2,newdata = future_reg2)
+future_reg2$region_income <- exp(future_reg2$predicted_log_income_reg2)
+
+
+
+#Region 3
+#create subset of data from train data based on Region
+region3_data <- train_data %>% filter(Region == "Region 3") ##filter based on Region
+##Use best model for that region
+gls_model3 <- gls(log(region_income)~log(population)+log(statewide_income), 
+                  data = region3_data, correlation = corAR1(form = ~ year)) ##change model according to regions
+summary(gls_model3)
+#multicollinearity test
+vif(gls_model3)
+#DW test
+residuals_gls3 <- residuals(gls_model3,type ='normalized')
+dw_tests_gls3 <- dwtest(residuals_gls3 ~ 1, data = region3_data)
+dw_tests_gls3
+##future diff_income
+future_reg3 <-test_data %>%
+  filter(Region == "Region 3") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg3$predicted_log_income_reg3 <- predict(gls_model3,newdata = future_reg3)
+future_reg3$region_income <- exp(future_reg3$predicted_log_income_reg3)
+
+
+#Region 4
+#create subset of data from train data based on Region
+region4_data <- train_data %>% filter(Region == "Region 4") ##filter based on Region
+##Use best model for that region
+gls_model4 <- gls(log(region_income)~log(population)+log(statewide_income), 
+                  data = region4_data, correlation = corAR1(form = ~ year)) ##change model according to regions
+summary(gls_model4)
+#multicollinearity test
+vif(gls_model4)
+#DW test
+residuals_gls4 <- residuals(gls_model4,type ='normalized')
+dw_tests_gls4 <- dwtest(residuals_gls4 ~ 1, data = region4_data)
+dw_tests_gls4
+
+##future diff_income
+future_reg4 <-test_data %>%
+  filter(Region == "Region 4") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg4$predicted_log_income_reg4 <- predict(gls_model4,newdata = future_reg4)
+future_reg4$region_income <- exp(future_reg4$predicted_log_income_reg4)
+
+
+#Region 6
+#create subset of data from train data based on Region
+region6_data <- train_data %>% filter(Region == "Region 6") ##filter based on Region
+##Use best model for that region
+gls_model6 <- gls(log(region_income)~log(population)+log(statewide_income), 
+                  data = region6_data, correlation = corAR1(form = ~ year)) ##change model according to regions
+summary(gls_model6)
+#multicollinearity test
+vif(gls_model6)
+#DW test
+residuals_gls6 <- residuals(gls_model6,type ='normalized')
+dw_tests_gls6 <- dwtest(residuals_gls6 ~ 1, data = region6_data)
+dw_tests_gls6
+
+
+##future diff_income
+future_reg6 <-test_data %>%
+  filter(Region == "Region 6") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg6$predicted_log_income_reg6 <- predict(gls_model6,newdata = future_reg6)
+future_reg6$region_income <- exp(future_reg6$predicted_log_income_reg6)
+
+
+#Region 13
+#create subset of data from train data based on Region
+region13_data <- train_data %>% filter(Region == "Region 13") ##filter based on Region
+##Use best model for that region
+gls_model13 <- gls(region_income~population+statewide_income, 
+                   data = region13_data, correlation = corAR1(form = ~ year)) ##change model according to regions
+summary(gls_model13)
+
+#multicollinearity test
+vif(gls_model13)
+#DW test
+residuals_gls13 <- residuals(gls_model13,type ='normalized')
+dw_tests_gls13 <- dwtest(residuals_gls13 ~ 1, data = region13_data)
+dw_tests_gls13
+
+##future diff_income
+future_reg13 <-test_data %>%
+  filter(Region == "Region 13") %>%  ##filter based on Region
+  arrange(year)
+##predicted data but it is a difference model which gives difference output so need to convert into actual numbers. 
+future_reg13$region_income  <- predict(gls_model13,newdata = future_reg13)
+
+##Combinging all forecasted values for GLS models
+combined_forecasted_values_GLS <- bind_rows(future_reg2,future_reg3,future_reg4,future_reg6,future_reg13)%>%
+  select(-predicted_log_income_reg2,-predicted_log_income_reg3,
+         -predicted_log_income_reg4,-predicted_log_income_reg6,-diff_region_income)
+
+##combining forecasted values for all regions
+combined_all <- bind_rows(combined_forecasted_values_GLS,future_regional_income_combined_OLS)
+
+train_data <- train_data%>% select(-diff_region_income)
+
+
+total_data <- bind_rows(combined_all,train_data)%>%
+  arrange(Region,year)%>%
+  select(-statewide_income_sq,	-regional_population_sq,	-statewide_popn_sq,	-statewide_popn_cube,
+         -diff_pop,	-diff_regional_population_sq,	-diff_state_income,	-diff_statewide_popn)
+
+##Final Output- Projected for each regions - 2024-2033
+write_xlsx(total_data, "final_output.xlsx")
+
+
